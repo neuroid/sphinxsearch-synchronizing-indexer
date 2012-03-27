@@ -29,8 +29,9 @@ Usage
 	All options apart from the ones defined above are passed to the indexer.
 
 The following commands should be available in $PATH: 
-* local host: indexer, kill, rsync, ssh
-* remote hosts: kill, mv, rename
+
+  - local host: indexer, kill, rsync, ssh
+  - remote hosts: kill, mv, rename
 
 
 Examples
