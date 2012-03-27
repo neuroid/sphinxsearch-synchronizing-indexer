@@ -1,0 +1,355 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""Wrapper for Sphinx indexer with synchronization capabilities"""
+
+import argparse
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+
+class SilentArgumentParser(argparse.ArgumentParser):
+    """Extended ArgumentParser which does not produce error messages"""
+    def error(self, message):
+        pass
+
+
+class Conf(object):
+    """Sphinx configuration parser"""
+    _index_section_token = 'index'
+    _index_path_token = 'path'
+    _searchd_pid_file_token = 'pid_file'
+
+    def __init__(self, filename):
+        self._file = open(filename, 'r')
+        self._sections = {}
+        self._parse()
+        self._resolve()
+
+    def _resolve(self):
+        """Resolve section inheritances"""
+        if not 'index' in self._sections:
+            return
+
+        for name, settings in self._sections['index'].iteritems():
+            leaf_settings = settings
+            path = None
+
+            while settings != None:
+                if 'path' in settings:
+                    path = settings['path']
+                    break
+                try:
+                    settings = self._sections['index'][settings['parent']]
+                except KeyError:
+                    settings = None
+
+            leaf_settings['path'] = path
+            if 'parent' in leaf_settings:
+                del leaf_settings['parent']
+
+    def _parse(self):
+        """Tokenize configuration and build a settings dictionary"""
+        # FIXME: this poor man's lexer should probably be replaced with one
+        #        that actually understands the syntax rules
+        tokens = shlex.split(self._file.read(), True)
+        index_name = None
+
+        for i in xrange(len(tokens)):
+            if tokens[i] == self._index_section_token:
+                if 'index' not in self._sections:
+                    self._sections['index'] = {}
+
+                index_name = tokens[i + 1]
+                self._sections['index'][index_name] = {}
+
+                if tokens[i + 2] == ':':
+                    self._sections['index'][index_name]['parent'] = \
+                        tokens[i + 3]
+
+                continue
+
+            if tokens[i] == self._index_path_token:
+                if not index_name:
+                    continue
+                self._sections['index'][index_name]['path'] = tokens[i + 2]
+
+            if tokens[i] == self._searchd_pid_file_token:
+                if 'searchd' not in self._sections:
+                    self._sections['searchd'] = {}
+                self._sections['searchd']['pid_file'] = tokens[i + 2]
+
+    def __getitem__(self, key):
+        return self._sections[key]
+
+    def __iter__(self):
+        return self._sections.__iter__()
+
+    def __len__(self):
+        return len(self._sections)
+
+    def __repr__(self):
+        return self._sections.__repr__()
+
+
+def _fargs(f, args, kwargs):
+    """Return a dictionary with arguments passed to function
+
+    Arguments:
+    f -- function object
+    args -- arguments passed to function
+    kwargs -- keyword arguments passed to function
+    """
+    if f.func_defaults:
+        args = list(args) + list(f.func_defaults)
+    fargnames = f.func_code.co_varnames[:f.func_code.co_argcount]
+    fargs = dict(zip(fargnames, args))
+    fargs.update(kwargs)
+    return fargs
+
+
+def call(shell=False):
+    """Decorator for creating process calls from returned arguments
+
+    Arguments:
+    shell -- see subprocess.call(..., shell=False)
+    """
+    def wrapper(f):
+        def wrapped(*args, **kwargs):
+            command = f(*args, **kwargs)
+            fargs = _fargs(f, args, kwargs)
+            dry_run = fargs['dry_run']
+
+            if isinstance(command, list):
+                info(' '.join(command))
+            else:
+                info(command)
+
+            if dry_run:
+                return 0
+
+            if type(shell) == type(wrapper):
+                return subprocess.call(command, shell=False)
+            else:
+                return subprocess.call(command, shell=shell)
+        return wrapped
+    if type(shell) == type(wrapper):
+        return wrapper(shell)
+    return wrapper
+
+
+def remote(f):
+    """Decorator for creating remote command calls"""
+    def wrapped(*args, **kwargs):
+        command = f(*args, **kwargs)
+        fargs = _fargs(f, args, kwargs)
+        host = fargs['host']
+        ssh_key = fargs['ssh_key']
+
+        if host:
+            remote_command = 'ssh -n '
+            if ssh_key:
+                remote_command += '-i %s ' % (ssh_key,)
+            remote_command += '%s "%s"' % (host, command)
+            remote_command = remote_command.replace('$', '\$')
+            return remote_command
+
+        return command
+    return wrapped
+
+
+@call
+def indexer(args, dry_run=False):
+    """Execute indexer with args"""
+    return ['indexer'] + args
+
+
+@call(shell=True)
+def rsync(host, src_path, dst_path, ssh_key=None, dry_run=False):
+    """Execute rsync
+
+    Arguments:
+    host -- address of a remote host
+    src_path -- source path
+    dst_path -- destination directory
+    ssh_key -- ssh key for connecting to the remote host
+    """
+    args = 'rsync -av --exclude "*.spl" --exclude "*.new.*"'
+    if ssh_key:
+        args += " -e 'ssh -i %s'" % (ssh_key,)
+    args += ' %s %s:%s' % (src_path, host, dst_path)
+    return args
+
+
+@call(shell=True)
+@remote
+def rename(path, suffix='', host=None, ssh_key=None, dry_run=False):
+    """Execute rename on index files, possibly on a remote host
+
+    Arguments:
+    path -- path to perform rename on
+    host -- address of a remote host
+    ssh_key -- ssh key for connecting to the remote host
+    """
+    return "rename -vf 's/([^\.]+)%s.*\.(.+)$/$1\.new\.$2/' %s" % (suffix,
+                                                                   path)
+
+
+@call(shell=True)
+@remote
+def mv(src_path, dst_path, host=None, ssh_key=None, dry_run=False):
+    """Execute mv, possibly on a remote host
+
+    Arguments:
+    src_path -- source path
+    dst_path -- destination path
+    host -- address of a remote host
+    ssh_key -- ssh key for connecting to the remote host
+    """
+    return "mv -vf %s %s" % (src_path, dst_path)
+
+
+@call(shell=True)
+@remote
+def hup(pid_file, host=None, ssh_key=None, dry_run=False):
+    """Send HUP to process id read from pid file, possibly on a remote host
+
+    Arguments:
+    pid_file -- path to pid file
+    host -- address of a remote host
+    ssh_key -- ssh key for connecting to the remote host
+    """
+    return 'kill -HUP `cat %s`' % (pid_file,)
+
+
+def info(msg):
+    """Print message with a prefix"""
+    print "[+] %s" % (msg,)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        epilog="""All options apart from the ones defined above are
+                    passed to the indexer.""",
+        usage="%(prog)s [options] [index, [index...]]")
+    parser.add_argument(
+        '--data-dir', help='force remote data directory', metavar='PATH',
+        dest='data_dir')
+    parser.add_argument(
+        '-n', '--dry-run', action='store_true', default=False,
+        help='do nothing, just print the commands that would get executed',
+        dest='dry_run')
+    parser.add_argument(
+        '-r', '--remote', action='append', default=[],
+        help='send indices to a remote host (can be given multiple times)',
+        metavar='[USER@]HOST', dest='remote')
+    parser.add_argument(
+        '--remove-suffix', default='',
+        help='when renaming index files to *.new.* remove suffix from names',
+        metavar='SUFFIX', dest='suffix')
+    parser.add_argument(
+        '--wait', default=5, type=int,
+        help=('''number of seconds to wait for local index rotation when
+              running with --rotate (default: %(default)s))'''),
+        metavar='SECONDS', dest='wait')
+    parser.add_argument(
+        '-s', '--sync-only', action='store_true', default=False,
+        help='sync indices and reload, do not rebuild or merge',
+        dest='sync_only')
+    parser.add_argument(
+        '--ssh-key', help='explicitly set a ssh key to use',
+        metavar='PATH', dest='ssh_key')
+
+    (options, args) = parser.parse_known_args()
+
+    # Parse additional arguments but let indexer handle the errors
+    indexer_parser = SilentArgumentParser()
+    indexer_parser.add_argument(
+        '-c', '--config', default='/etc/sphinxsearch/sphinx.conf',
+        dest='config')
+    indexer_parser.add_argument(
+        '--all', action='store_true', default=False, dest='all')
+    indexer_parser.add_argument('index', nargs='*')
+    indexer_parser.add_argument(
+        '--rotate', action='store_true', default=False, dest='rotate')
+    indexer_parser.add_argument(
+        '--merge', nargs=2, dest='merge')
+
+    try:
+        (indexer_options, indexer_args) = indexer_parser.parse_known_args(args)
+        conf = Conf(indexer_options.config)
+    except (TypeError, IOError):
+        sys.exit(indexer(args))
+
+    if not options.sync_only:
+        returncode = indexer(args, dry_run=options.dry_run)
+        if returncode != 0:
+            info("Aborting due to indexer errors")
+            sys.exit(returncode)
+        # If local rebuild requires rotation give searchd some time to rename
+        # the files before attempting synchronization
+        if (indexer_options.rotate and options.remote and options.wait > 0 and
+                not options.dry_run):
+            info("Waiting for searchd to complete index rotation")
+            time.sleep(options.wait)
+
+    # Force syncing of the merge target only
+    if indexer_options.merge:
+        indexer_options.index = [indexer_options.merge[0]]
+        indexer_options.all = False
+
+    for remote in options.remote:
+        for name, settings in conf['index'].iteritems():
+            if not indexer_options.all and name not in indexer_options.index:
+                continue
+
+            path = settings['path']
+            if not path:
+                continue
+
+            if options.data_dir:
+                dst_path = options.data_dir
+            else:
+                dst_path = os.path.dirname(path)
+            # To avoid overwriting of live indexes files are copied to a
+            # temporary directory, renamed and finally moved in place
+            tmp_dst_path = dst_path + '/tmp'
+            rename_path = path.replace(os.path.dirname(path), tmp_dst_path)
+
+            returncode = rsync(remote, path + '.*', tmp_dst_path,
+                               ssh_key=options.ssh_key,
+                               dry_run=options.dry_run)
+            if returncode != 0:
+                info("Aborting due to rsync errors")
+                sys.exit(returncode)
+
+            returncode = rename(rename_path + '.*', options.suffix,
+                                host=remote, ssh_key=options.ssh_key,
+                                dry_run=options.dry_run)
+            if returncode != 0:
+                info("Aborting due to rename errors")
+                sys.exit(returncode)
+
+            if options.suffix:
+                mv_src_path = re.sub('%s$' % (options.suffix,), '',
+                                     rename_path)
+            else:
+                mv_src_path = rename_path
+
+            returncode = mv(mv_src_path + '.new.*', dst_path, host=remote,
+                            ssh_key=options.ssh_key, dry_run=options.dry_run)
+            if returncode != 0:
+                info("Aborting due to mv errors")
+                sys.exit(returncode)
+
+    # Send signals after synchronization to minimize the time during which
+    # indices are inconsistent across replicas
+    for remote in options.remote:
+        hup(conf['searchd']['pid_file'], host=remote, ssh_key=options.ssh_key,
+            dry_run=options.dry_run)
+
+    info("Done")
