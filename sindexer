@@ -223,7 +223,7 @@ def hup(pid_file, host=None, ssh_key=None, dry_run=False):
     host -- address of a remote host
     ssh_key -- ssh key for connecting to the remote host
     """
-    return 'kill -HUP `cat %s`' % (pid_file,)
+    return 'cat %s | xargs kill -HUP' % (pid_file,)
 
 
 def info(msg):
