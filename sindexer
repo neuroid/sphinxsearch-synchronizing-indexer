@@ -23,10 +23,12 @@ class Conf(object):
     _index_section_token = 'index'
     _index_path_token = 'path'
     _searchd_pid_file_token = 'pid_file'
+    _inheritance_token = ':'
 
     def __init__(self, filename):
         self._file = open(filename, 'r')
-        self._sections = {}
+        self._sections = {'index': {},
+                          'searchd': {}}
         self._parse()
         self._resolve()
 
@@ -56,32 +58,46 @@ class Conf(object):
         """Tokenize configuration and build a settings dictionary"""
         # FIXME: this poor man's lexer should probably be replaced with one
         #        that actually understands the syntax rules
-        tokens = shlex.split(self._file.read(), True)
+        lexer = shlex.shlex(self._file, True)
+        lexer.wordchars += ".+->/"
+
+        def get_token_or_die():
+            token = lexer.get_token()
+            if token == lexer.eof:
+                raise TypeError('Unexpected EOL')
+            return token
+
+        token = None
         index_name = None
 
-        for i in xrange(len(tokens)):
-            if tokens[i] == self._index_section_token:
-                if 'index' not in self._sections:
-                    self._sections['index'] = {}
+        while token != lexer.eof:
+            token = lexer.get_token()
 
-                index_name = tokens[i + 1]
+            # Index name and parent
+            if token == self._index_section_token:
+                index_name = get_token_or_die()
                 self._sections['index'][index_name] = {}
-
-                if tokens[i + 2] == ':':
+                token = get_token_or_die()
+                if token == self._inheritance_token:
                     self._sections['index'][index_name]['parent'] = \
-                        tokens[i + 3]
-
+                        get_token_or_die()
+                else:
+                    lexer.push_token(token)
                 continue
 
-            if tokens[i] == self._index_path_token:
+            # Index path
+            if token == self._index_path_token:
                 if not index_name:
                     continue
-                self._sections['index'][index_name]['path'] = tokens[i + 2]
+                get_token_or_die()  # pop =
+                self._sections['index'][index_name]['path'] = \
+                    get_token_or_die()
+                continue
 
-            if tokens[i] == self._searchd_pid_file_token:
-                if 'searchd' not in self._sections:
-                    self._sections['searchd'] = {}
-                self._sections['searchd']['pid_file'] = tokens[i + 2]
+            # Pid file
+            if token == self._searchd_pid_file_token:
+                get_token_or_die()  # pop =
+                self._sections['searchd']['pid_file'] = get_token_or_die()
 
     def __getitem__(self, key):
         return self._sections[key]
