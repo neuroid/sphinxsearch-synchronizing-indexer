@@ -21,6 +21,7 @@ class SilentArgumentParser(argparse.ArgumentParser):
 class Conf(object):
     """Sphinx configuration parser"""
     _index_section_token = 'index'
+    _index_type_token = 'type'
     _index_path_token = 'path'
     _searchd_pid_file_token = 'pid_file'
     _inheritance_token = ':'
@@ -41,7 +42,7 @@ class Conf(object):
             leaf_settings = settings
             path = None
 
-            while settings != None:
+            while settings is not None:
                 if 'path' in settings:
                     path = settings['path']
                     break
@@ -85,19 +86,19 @@ class Conf(object):
                     lexer.push_token(token)
                 continue
 
-            # Index path
-            if token == self._index_path_token:
+            # Index type and path
+            if token in (self._index_type_token, self._index_path_token):
                 if not index_name:
                     continue
                 get_token_or_die()  # pop =
-                self._sections['index'][index_name]['path'] = \
+                self._sections['index'][index_name][token] = \
                     get_token_or_die()
                 continue
 
             # Pid file
             if token == self._searchd_pid_file_token:
                 get_token_or_die()  # pop =
-                self._sections['searchd']['pid_file'] = get_token_or_die()
+                self._sections['searchd'][token] = get_token_or_die()
 
     def __getitem__(self, key):
         return self._sections[key]
@@ -322,6 +323,13 @@ if __name__ == '__main__':
         for name, settings in conf['index'].iteritems():
             if not indexer_options.all and name not in indexer_options.index:
                 continue
+
+            # Skip non-plain indices
+            try:
+                if settings['type'] != 'plain':
+                    continue
+            except KeyError:  # Default type is plain
+                pass
 
             path = settings['path']
             if not path:
