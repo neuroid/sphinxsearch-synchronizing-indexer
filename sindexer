@@ -212,8 +212,8 @@ def rename(path, suffix='', host=None, ssh_key=None, dry_run=False):
     host -- address of a remote host
     ssh_key -- ssh key for connecting to the remote host
     """
-    return "rename -vf 's/([^\.]+)%s.*\.(.+)$/$1\.new\.$2/' %s" % (suffix,
-                                                                   path)
+    return "rename -vf 's/^((?:(?!\.new|\.tmp).)*)%s\.(s[^\.]+)$/$1\.new\.$2/' %s" % (suffix,
+                                                                                      path)
 
 
 @call(shell=True)
