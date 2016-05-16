@@ -195,7 +195,7 @@ def rsync(host, src_path, dst_path, ssh_key=None, dry_run=False):
     dst_path -- destination directory
     ssh_key -- ssh key for connecting to the remote host
     """
-    args = 'rsync -av --exclude "*.spl" --exclude "*.new.*"'
+    args = 'rsync -av --exclude "*.spl" --exclude "*.new.*" --exclude "*.tmp.*"'
     if ssh_key:
         args += " -e 'ssh -i %s'" % (ssh_key,)
     args += ' %s %s:%s' % (src_path, host, dst_path)
