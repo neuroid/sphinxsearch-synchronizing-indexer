@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 """Wrapper for Sphinx indexer with synchronization capabilities"""
 
+from __future__ import print_function
 import argparse
 import os
 import re
@@ -35,10 +35,10 @@ class Conf(object):
 
     def _resolve(self):
         """Resolve section inheritances"""
-        if not 'index' in self._sections:
+        if 'index' not in self._sections:
             return
 
-        for name, settings in self._sections['index'].iteritems():
+        for name, settings in self._sections['index'].items():
             leaf_settings = settings
             path = None
 
@@ -121,9 +121,9 @@ def _fargs(f, args, kwargs):
     args -- arguments passed to function
     kwargs -- keyword arguments passed to function
     """
-    if f.func_defaults:
-        args = list(args) + list(f.func_defaults)
-    fargnames = f.func_code.co_varnames[:f.func_code.co_argcount]
+    if f.__defaults__:
+        args = list(args) + list(f.__defaults__)
+    fargnames = f.__code__ .co_varnames[:f.__code__ .co_argcount]
     fargs = dict(zip(fargnames, args))
     fargs.update(kwargs)
     return fargs
@@ -170,8 +170,8 @@ def remote(f):
         if host:
             remote_command = 'ssh -n '
             if ssh_key:
-                remote_command += '-i %s ' % (ssh_key,)
-            remote_command += '%s "%s"' % (host, command)
+                remote_command += '-i {} '.format(ssh_key)
+            remote_command += '{} "{}"'.format(host, command)
             remote_command = remote_command.replace('$', '\$')
             return remote_command
 
@@ -197,8 +197,8 @@ def rsync(host, src_path, dst_path, ssh_key=None, dry_run=False):
     """
     args = 'rsync -av --exclude "*.spl" --exclude "*.new.*" --exclude "*.tmp.*"'
     if ssh_key:
-        args += " -e 'ssh -i %s'" % (ssh_key,)
-    args += ' %s %s:%s' % (src_path, host, dst_path)
+        args += " -e 'ssh -i {}'".format(ssh_key)
+    args += ' {} {}:{}'.format(src_path, host, dst_path)
     return args
 
 
@@ -212,8 +212,7 @@ def rename(path, suffix='', host=None, ssh_key=None, dry_run=False):
     host -- address of a remote host
     ssh_key -- ssh key for connecting to the remote host
     """
-    return "rename -vf 's/^((?:(?!\.new|\.tmp).)*)%s\.(s[^\.]+)$/$1\.new\.$2/' %s" % (suffix,
-                                                                                      path)
+    return "rename -v -f 's/^((?:(?!\.new|\.tmp).)*){}\.(s[^\.]+)$/$1\.new\.$2/' {}".format(suffix, path)
 
 
 @call(shell=True)
@@ -227,7 +226,7 @@ def mv(src_path, dst_path, host=None, ssh_key=None, dry_run=False):
     host -- address of a remote host
     ssh_key -- ssh key for connecting to the remote host
     """
-    return "mv -vf %s %s" % (src_path, dst_path)
+    return "mv -vf {} {}".format(src_path, dst_path)
 
 
 @call(shell=True)
@@ -240,12 +239,12 @@ def hup(pid_file, host=None, ssh_key=None, dry_run=False):
     host -- address of a remote host
     ssh_key -- ssh key for connecting to the remote host
     """
-    return 'cat %s | xargs kill -HUP' % (pid_file,)
+    return 'cat {} | xargs kill -HUP'.format(pid_file)
 
 
 def info(msg):
     """Print message with a prefix"""
-    print "[+] %s" % (msg,)
+    print("[+] {}".format(msg))
 
 
 if __name__ == '__main__':
@@ -320,7 +319,7 @@ if __name__ == '__main__':
         indexer_options.all = False
 
     for remote in options.remote:
-        for name, settings in conf['index'].iteritems():
+        for name, settings in conf['index'].items():
             if not indexer_options.all and name not in indexer_options.index:
                 continue
 
@@ -359,7 +358,7 @@ if __name__ == '__main__':
                 sys.exit(returncode)
 
             if options.suffix:
-                mv_src_path = re.sub('%s$' % (options.suffix,), '',
+                mv_src_path = re.sub('{}$'.format(options.suffix), '',
                                      rename_path)
             else:
                 mv_src_path = rename_path
